@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+
+<svg width="960" height="600"></svg>
+
+<script src="https://d3js.org/d3.v4.min.js"></script>
+<script>
+
+
+var baseNodes = [
+  { id: "mammal", group: 0, label: "Mammals", level: 1 },
+  { id: "dog"   , group: 0, label: "Dogs"   , level: 2 },
+  { id: "cat"   , group: 0, label: "Cats"   , level: 2 },
+  { id: "fox"   , group: 0, label: "Foxes"  , level: 2 },
+  { id: "elk"   , group: 0, label: "Elk"    , level: 2 },
+  { id: "insect", group: 1, label: "Insects", level: 1 },
+  { id: "ant"   , group: 1, label: "Ants"   , level: 2 },
+  { id: "bee"   , group: 1, label: "Bees"   , level: 2 },
+  { id: "fish"  , group: 2, label: "Fish"   , level: 1 },
+  { id: "carp"  , group: 2, label: "Carp"   , level: 2 },
+  { id: "pike"  , group: 2, label: "Pikes"  , level: 2 }
+]
+
+var baseLinks = [
+	{ target: "mammal", source: "dog" , strength: 0.7 },
+	{ target: "mammal", source: "cat" , strength: 0.7 },
+  { target: "mammal", source: "fox" , strength: 0.7 },
+  { target: "mammal", source: "elk" , strength: 0.7 },
+  { target: "insect", source: "ant" , strength: 0.7 },
+  { target: "insect", source: "bee" , strength: 0.7 },
+  { target: "fish"  , source: "carp", strength: 0.7 },
+  { target: "fish"  , source: "pike", strength: 0.7 },
+  { target: "cat"   , source: "elk" , strength: 0.1 },
+  { target: "carp"  , source: "ant" , strength: 0.1 },
+  { target: "elk"   , source: "bee" , strength: 0.1 },
+  { target: "dog"   , source: "cat" , strength: 0.1 },
+  { target: "fox"   , source: "ant" , strength: 0.1 },
+	{ target: "pike"  , source: "cat" , strength: 0.1 }
+]
+
+var nodes = [...baseNodes]
+var links = [...baseLinks]
+
+function getNeighbors(node) {
+  return baseLinks.reduce(function (neighbors, link) {
+      if (link.target.id === node.id) {
+        neighbors.push(link.source.id)
+      } else if (link.source.id === node.id) {
+        neighbors.push(link.target.id)
+      }
+      return neighbors
+    },
+    [node.id]
+  )
+}
+
+function isNeighborLink(node, link) {
+  return link.target.id === node.id || link.source.id === node.id
+}
+
+
+function getNodeColor(node, neighbors) {
+  if (Array.isArray(neighbors) && neighbors.indexOf(node.id) > -1) {
+    return node.level === 1 ? 'blue' : 'green'
+  }
+
+  return node.level === 1 ? 'red' : 'gray'
+}
+
+
+function getLinkColor(node, link) {
+  return isNeighborLink(node, link) ? 'green' : '#E5E5E5'
+}
+
+function getTextColor(node, neighbors) {
+  return Array.isArray(neighbors) && neighbors.indexOf(node.id) > -1 ? 'green' : 'black'
+}
+
+var width = window.innerWidth
+var height = window.innerHeight
+
+var svg = d3.select('svg')
+svg.attr('width', width).attr('height', height)
+
+var linkElements,
+  nodeElements,
+  textElements
+
+// we use svg groups to logically group the elements together
+var linkGroup = svg.append('g').attr('class', 'links')
+var nodeGroup = svg.append('g').attr('class', 'nodes')
+var textGroup = svg.append('g').attr('class', 'texts')
+
+// we use this reference to select/deselect
+// after clicking the same element twice
+var selectedId
+
+// simulation setup with all forces
+var linkForce = d3
+  .forceLink()
+  .id(function (link) { return link.id })
+  .strength(function (link) { return link.strength })
+
+var simulation = d3
+  .forceSimulation()
+  .force('link', linkForce)
+  .force('charge', d3.forceManyBody().strength(-120))
+  .force('center', d3.forceCenter(width / 2, height / 2))
+
+var dragDrop = d3.drag().on('start', function (node) {
+  node.fx = node.x
+  node.fy = node.y
+}).on('drag', function (node) {
+  simulation.alphaTarget(0.7).restart()
+  node.fx = d3.event.x
+  node.fy = d3.event.y
+}).on('end', function (node) {
+  if (!d3.event.active) {
+    simulation.alphaTarget(0)
+  }
+  node.fx = null
+  node.fy = null
+})
+
+// select node is called on every click
+// we either update the data according to the selection
+// or reset the data if the same node is clicked twice
+function selectNode(selectedNode) {
+  if (selectedId === selectedNode.id) {
+    selectedId = undefined
+    resetData()
+    updateSimulation()
+  } else {
+    selectedId = selectedNode.id
+    updateData(selectedNode)
+    updateSimulation()
+  }
+
+  var neighbors = getNeighbors(selectedNode)
+
+  // we modify the styles to highlight selected nodes
+  nodeElements.attr('fill', function (node) { return getNodeColor(node, neighbors) })
+  textElements.attr('fill', function (node) { return getTextColor(node, neighbors) })
+  linkElements.attr('stroke', function (link) { return getLinkColor(selectedNode, link) })
+}
+
+// this helper simple adds all nodes and links
+// that are missing, to recreate the initial state
+function resetData() {
+  var nodeIds = nodes.map(function (node) { return node.id })
+
+  baseNodes.forEach(function (node) {
+    if (nodeIds.indexOf(node.id) === -1) {
+      nodes.push(node)
+    }
+  })
+
+  links = baseLinks
+}
+
+// diffing and mutating the data
+function updateData(selectedNode) {
+  var neighbors = getNeighbors(selectedNode)
+  var newNodes = baseNodes.filter(function (node) {
+    return neighbors.indexOf(node.id) > -1 || node.level === 1
+  })
+
+  var diff = {
+    removed: nodes.filter(function (node) { return newNodes.indexOf(node) === -1 }),
+    added: newNodes.filter(function (node) { return nodes.indexOf(node) === -1 })
+  }
+
+  diff.removed.forEach(function (node) { nodes.splice(nodes.indexOf(node), 1) })
+  diff.added.forEach(function (node) { nodes.push(node) })
+
+  links = baseLinks.filter(function (link) {
+    return link.target.id === selectedNode.id || link.source.id === selectedNode.id
+  })
+}
+
+function updateGraph() {
+  // links
+  linkElements = linkGroup.selectAll('line')
+    .data(links, function (link) {
+      return link.target.id + link.source.id
+    })
+
+  linkElements.exit().remove()
+
+  var linkEnter = linkElements
+    .enter().append('line')
+    .attr('stroke-width', 1)
+    .attr('stroke', 'rgba(50, 50, 50, 0.2)')
+
+  linkElements = linkEnter.merge(linkElements)
+
+  // nodes
+  nodeElements = nodeGroup.selectAll('circle')
+    .data(nodes, function (node) { return node.id })
+
+  nodeElements.exit().remove()
+
+  var nodeEnter = nodeElements
+    .enter()
+    .append('circle')
+    .attr('r', 10)
+    .attr('fill', function (node) { return node.level === 1 ? 'red' : 'gray' })
+    .call(dragDrop)
+    // we link the selectNode method here
+    // to update the graph on every click
+    .on('click', selectNode)
+
+  nodeElements = nodeEnter.merge(nodeElements)
+
+  // texts
+  textElements = textGroup.selectAll('text')
+    .data(nodes, function (node) { return node.id })
+
+  textElements.exit().remove()
+
+  var textEnter = textElements
+    .enter()
+    .append('text')
+    .text(function (node) { return node.label })
+    .attr('font-size', 15)
+    .attr('dx', 15)
+    .attr('dy', 4)
+
+  textElements = textEnter.merge(textElements)
+}
+
+function updateSimulation() {
+  updateGraph()
+
+  simulation.nodes(nodes).on('tick', () => {
+    nodeElements
+      .attr('cx', function (node) { return node.x })
+      .attr('cy', function (node) { return node.y })
+    textElements
+      .attr('x', function (node) { return node.x })
+      .attr('y', function (node) { return node.y })
+    linkElements
+      .attr('x1', function (link) { return link.source.x })
+      .attr('y1', function (link) { return link.source.y })
+      .attr('x2', function (link) { return link.target.x })
+      .attr('y2', function (link) { return link.target.y })
+  })
+
+  simulation.force('link').links(links)
+  simulation.alphaTarget(0.7).restart()
+}
+
+// last but not least, we call updateSimulation
+// to trigger the initial render
+updateSimulation()
+
+</script>
+
+
+
+{ target: "Vitamin D", source: "Vitamin D2" , strength: .1 },
+{ target: "Vitamin D", source: "Vitamin D milk" , strength: .5 },
+{ target: "Vitamin D", source: "previtamin D(3)" , strength: .6 },
+{ target: "Vitamin D", source: "Vitamin disease" , strength: .6 },
+{ target: "Vitamin D", source: "Vitamin D intake" , strength: .7 },
+{ target: "Vitamin D", source: "3-thiovitamin D3" , strength: .7 },
+{ target: "Vitamin D", source: "Vitamin D Analog" , strength: .7 },
+{ target: "Vitamin D", source: "25-azavitamin D3" , strength: .7 },
+{ target: "Vitamin D", source: "Vitamin depletion" , strength: .8 },
+{ target: "Vitamin D", source: "vitamin D binding" , strength: .8 },
+{ target: "Vitamin D", source: "3-deoxyvitamin D3" , strength: .8 },
+{ target: "Vitamin D", source: "1-ALPHA-VITAMIN D" , strength: .8 },
+{ target: "Vitamin D", source: "Vitamin D overdose" , strength: .9 },
+{ target: "Vitamin D", source: "1-hydroxyvitamin D5" , strength: .10 },
+{ target: "Vitamin D", source: "Increased vitamin D" , strength: .10 },
+{ target: "Vitamin D", source: "Calcium + vitamin D" , strength: .10 },
+{ target: "Vitamin D", source: "Vitamin D-rich diet" , strength: .10 },
+{ target: "Vitamin D", source: "Vitamin D3 Receptor" , strength: .10 },
+{ target: "Vitamin D", source: "Decreased vitamin D" , strength: .10 },
+{ target: "Vitamin D", source: "22-fluorovitamin D3)" , strength: .10 },
+{ target: "Vitamin D", source: "25-hydroxyvitamin D" , strength: .10 },
+{ target: "Vitamin D", source: "dihydroxy-vitamin D3" , strength: .11 },
+{ target: "Vitamin D", source: "24-hydroxyvitamin D3" , strength: .11 },
+{ target: "Vitamin D", source: "20-hydroxyvitamin D3" , strength: .11 },
+{ target: "Vitamin D", source: "Vitamin D Deficiency" , strength: .11 },
+{ target: "Vitamin D", source: "vitamin D metabolism" , strength: .11 },
+{ target: "Vitamin D", source: "24-hydroxyvitamin D2" , strength: .11 },
+{ target: "Vitamin D", source: "Nutrition, Vitamin D" , strength: .11 },
+{ target: "Vitamin D", source: "vitamin D3 palmitate" , strength: .11 },
+{ target: "Vitamin D", source: "vitamin D catabolism" , strength: .11 },
+{ target: "Vitamin D", source: "11-hydroxyvitamin D3" , strength: .11 },
+{ target: "Vitamin D", source: "Vitamin D measurement" , strength: .12 },
+{ target: "Vitamin D", source: "Vitamin D3 metabolite" , strength: .12 },
+{ target: "Vitamin D", source: "25-Hydroxyvitamin D 2" , strength: .12 },
+{ target: "Vitamin D", source: "22-ene-25-oxavitamin D" , strength: .13 },
+{ target: "Vitamin D", source: "Poisoning by vitamin D" , strength: .13 },
+{ target: "Vitamin D", source: "1-hydroxyprevitamin D3" , strength: .13 },
+{ target: "Vitamin D", source: "Vitamin D3 Receptor|VDR" , strength: .14 },
+{ target: "Vitamin D", source: "Vitamin D3 Receptor|DIO3" , strength: .15 },
+{ target: "Vitamin D", source: "vitamin D3 sulfoconjugate" , strength: .16 },
+{ target: "Vitamin D", source: "VITAMIN D AND METABOLITES" , strength: .16 },
+{ target: "Vitamin D", source: "vitamin D3 25-hydroxylase" , strength: .16 },
+{ target: "Vitamin D", source: "Vitamin D Chewable Tablet" , strength: .16 },
+{ target: "Vitamin D", source: "Vitamin D-Binding Protein" , strength: .16 },
+{ target: "Vitamin D", source: "Vitamin D Response Element" , strength: .17 },
+{ target: "Vitamin D", source: "vitamin D receptor binding" , strength: .17 },
+{ target: "Vitamin D", source: "24-oxa-1-hydroxyvitamin D3" , strength: .17 },
+{ target: "Vitamin D", source: "vitamin D3 glucosiduronate" , strength: .17 },
+{ target: "Vitamin D", source: "Serum vitamin D measurement" , strength: .18 },
+{ target: "Vitamin D", source: "Vitamin D-dependent rickets" , strength: .18 },
+{ target: "Vitamin D", source: "Serum vitamin D2 measurement" , strength: .19 },
+{ target: "Vitamin D", source: "Vitamin D-Binding Protein|GC" , strength: .19},
+{ target: "Vitamin D", source: "23-keto-25-hydroxyvitamin D3" , strength: .19 },
+{ target: "Vitamin D", source: "10-keto-25-hydroxyvitamin D3" , strength: .19},
+{ target: "Vitamin D", source: "vitamin D 1-alpha hydroxylase" , strength: .20 },
+{ target: "Vitamin D", source: "1-hydroxy-25-fluorovitamin D3" , strength: .20 },
+{ target: "Vitamin D", source: "vitamin D3 25-hydroxylase|DIO3" , strength: .21 },
+{ target: "Vitamin D", source: "Accidental vitamin D poisoning" , strength: .21 },
+{ target: "Vitamin D", source: "Water soluble vitamin deficienciess" , strength: .25 },
+{ target: "Vitamin D", source: "vitamin D3 25-hydroxylase activity" , strength: .25 },
+
+
+{ id: "Vitamin D", group: 2, label: "Vitamin D", level: 1},
+{ id: "Vitamin D2", group: 2, label: "Vitamin D2", level: 2},
+{ id: "previtamin D(3)", group: 2, label: "previtamin D(3)", level: 2},
+{ id: "Vitamin disease", group: 2, label: "Vitamin disease", level: 2},
+{ id: "Vitamin D intake", group: 2, label: "Vitamin D intake", level: 2},
+{ id: "3-thiovitamin D3", group: 2, label: "3-thiovitamin D3", level: 2},
+{ id: "Vitamin D Analog", group: 2, label: "Vitamin D Analog", level: 2},
+{ id: "25-azavitamin D3", group: 2, label: "25-azavitamin D3", level: 2},
+{ id: "Vitamin depletion", group: 2, label: "Vitamin depletion", level: 2},
+{ id: "vitamin D binding", group: 2, label:"vitamin D binding", level: 2},
+{ id: "3-deoxyvitamin D3", group: 2, label: "3-deoxyvitamin D3", level: 2},
+{ id: "1-ALPHA-VITAMIN D", group: 2, label: "1-ALPHA-VITAMIN D", level: 2},
+{ id: "Vitamin D overdose", group: 2, label: "Vitamin D overdose", level: 2},
+{ id: "1-hydroxyvitamin D5", group: 2, label: "1-hydroxyvitamin D5", level: 2},
+{ id: "Increased vitamin D", group: 2, label: "Increased vitamin D", level: 2},
+{ id: "Calcium + vitamin D", group: 2, label: "Calcium + vitamin D", level: 2},
+{ id: "Vitamin D-rich diet", group: 2, label: "Vitamin D-rich diet", level: 2},
+{ id: "Vitamin D3 Receptor", group: 2, label: "Vitamin D3 Receptor", level: 2},
+{ id: "Decreased vitamin D", group: 2, label: "Decreased vitamin D", level: 2},
+{ id: "22-fluorovitamin D3", group: 2, label: "22-fluorovitamin D3", level: 2},
+{ id: "25-hydroxyvitamin D", group: 2, label: "25-hydroxyvitamin D", level: 2},
+{ id: "dihydroxy-vitamin D3", group: 2, label: "dihydroxy-vitamin D3", level: 2},
+{ id: "24-hydroxyvitamin D3", group: 2, label: "24-hydroxyvitamin D3", level: 2},
+{ id: "20-hydroxyvitamin D3", group: 2, label: "20-hydroxyvitamin D3", level: 2},
+{ id: "Vitamin D Deficiency", group: 2, label: "Vitamin D Deficiency", level: 2},
+{ id: "vitamin D metabolism", group: 2, label: "vitamin D metabolism", level: 2},
+{ id: "24-hydroxyvitamin D2", group: 2, label: "24-hydroxyvitamin D2", level: 2},
+{ id: "Nutrition, Vitamin D", group: 2, label: "Nutrition, Vitamin D", level: 2},
+{ id: "vitamin D3 palmitate", group: 2, label: "vitamin D3 palmitate", level: 2},
+{ id: "vitamin D catabolism", group: 2, label: "vitamin D catabolism", level: 2},
+{ id: "11-hydroxyvitamin D3", group: 2, label: "11-hydroxyvitamin D3", level: 2},
+{ id: "Vitamin D measurement", group: 2, label: "Vitamin D measurement", level: 2},
+{ id: "Vitamin D3 metabolite", group: 2, label: "Vitamin D3 metabolite", level: 2},
+{ id: "25-Hydroxyvitamin D 2", group: 2, label: "25-Hydroxyvitamin D 2", level: 2},
+{ id: "vitamin D biosynthesis", group: 2, label: "vitamin D biosynthesis", level: 2},
+{ id: "22-ene-25-oxavitamin D", group: 2, label: "22-ene-25-oxavitamin D", level: 2},
+{ id: "Poisoning by vitamin D", group: 2, label: "Poisoning by vitamin D", level: 2},
+{ id: "1-hydroxyprevitamin D3", group: 2, label: "1-hydroxyprevitamin D3", level: 2},
+{ id: "Vitamin D3 Receptor|VDR", group: 2, label: "Vitamin D3 Receptor|VDR", level: 2},
+{ id: "Vitamin D3 Receptor|DIO3", group: 2, label: "Vitamin D3 Receptor|DIO3", level: 2},
+{ id: "vitamin D3 sulfoconjugate", group: 2, label: "vitamin D3 sulfoconjugate", level: 2},
+{ id: "VITAMIN D AND METABOLITES", group: 2, label: "VITAMIN D AND METABOLITES", level: 2},
+{ id: "vitamin D3 25-hydroxylase", group: 2, label: "vitamin D3 25-hydroxylase", level: 2},
+{ id: "Vitamin D Chewable Tablet", group: 2, label: "Vitamin D Chewable Tablet", level: 2},
+{ id: "Vitamin D-Binding Protein", group: 2, label: "Vitamin D-Binding Protein", level: 2},
+{ id: "Vitamin D Response Element", group: 2, label: "Vitamin D Response Element", level: 2},
+{ id: "vitamin D receptor binding", group: 2, label: "vitamin D receptor binding", level: 2},
+{ id: "24-oxa-1-hydroxyvitamin D3", group: 2, label: "24-oxa-1-hydroxyvitamin D3", level: 2},
+{ id: "vitamin D3 glucosiduronate", group: 2, label: "vitamin D3 glucosiduronate", level: 2},
+{ id: "Serum vitamin D measurement", group: 2, label: "Serum vitamin D measurement", level: 2},
+{ id: "Vitamin D-dependent rickets", group: 2, label: "Vitamin D-dependent rickets", level: 2},
+{ id: "Serum vitamin D2 measurement", group: 2, label: "Serum vitamin D2 measurement", level: 2},
+{ id: "Vitamin D-Binding Protein|GC", group: 2, label: "Vitamin D-Binding Protein|GC", level: 2},
+{ id: "23-keto-25-hydroxyvitamin D3", group: 2, label: "23-keto-25-hydroxyvitamin D3", level: 2},
+{ id: "10-keto-25-hydroxyvitamin D3", group: 2, label: "10-keto-25-hydroxyvitamin D3", level: 2},
+{ id: "vitamin D 1-alpha hydroxylase", group: 2, label: "vitamin D 1-alpha hydroxylase", level: 2},
+{ id: "1-hydroxy-25-fluorovitamin D3", group: 2, label: "1-hydroxy-25-fluorovitamin D3", level: 2},
+{ id: "vitamin D3 25-hydroxylase|DIO3", group: 2, label: "vitamin D3 25-hydroxylase|DIO3", level: 2},
+{ id: "Accidental vitamin D poisoning", group: 2, label: "Accidental vitamin D poisoning", level: 2},
+{ id: "Water soluble vitamin deficiencies", group: 2, label: "Water soluble vitamin deficiencies", level: 2},
+
+
+
+
+
+{ target: "Alzheimers", source: "Focal Alzheimers disease" , strength: .14 },
+{ target: "Alzheimers", source: "Alzheimers disease antigen" , strength: .16 },
+{ target: "Alzheimers", source: "Familial Alzheimers disease" , strength: .17 },
+{ target: "Alzheimers", source: "Alzheimers disease assessment scale" , strength: .25 },
+
+
+
+
+{ target: "Vitamin A", source: "anhydrovitamin A(2)" , strength: .10 },
+{ target: "Vitamin A", source: "Increased vitamin A" , strength: .10 },
+{ target: "Vitamin A", source: "Decreased vitamin A" , strength: .10 },
+{ target: "Vitamin A", source: "Vitamin A-rich diet" , strength: .10 },
+{ target: "Vitamin A", source: "vitamin A metabolism" , strength: .11},
+{ target: "Vitamin A", source: "Nutrition, Vitamin A" , strength: .11 },
+{ target: "Vitamin A", source: "vitamin A ophthalmic" , strength: .11 },
+{ target: "Vitamin A", source: "Vitamin A Deficiency" , strength: .11 },
+{ target: "Vitamin A", source: "Vitamin A measurement" , strength: .12 },
+{ target: "Vitamin A", source: "Poisoning by vitamin A" , strength: .13 },
+{ target: "Vitamin A", source: "vitamin A biosynthesis" , strength: .13 },
+{ target: "Vitamin A", source: "Vitamin A absorption test" , strength: .16 },
+{ target: "Vitamin A", source: "vitamin A acid ethylamide" , strength: .16 },
+{ target: "Vitamin A", source: "Serum vitamin A measurement" , strength: .18 },
+{ target: "Vitamin A", source: "Accidental vitamin A poisoning" , strength: .21 },
+{ target: "Vitamin A", source: "Vitamin A-responsive dermatosis" , strength: .22 },
+
+
+
+{ target: "Vitamin D", source: "Vitamin D2" , strength: .1 },
+{ target: "Vitamin D", source: "Vitamin D milk" , strength: .5 },
+{ target: "Vitamin D", source: "previtamin D(3)" , strength: .6 },
+{ target: "Vitamin D", source: "Vitamin disease" , strength: .6 },
+{ target: "Vitamin D", source: "Vitamin D intake" , strength: .7 },
+{ target: "Vitamin D", source: "3-thiovitamin D3" , strength: .7 },
+{ target: "Vitamin D", source: "Vitamin D Analog" , strength: .7 },
+{ target: "Vitamin D", source: "25-azavitamin D3" , strength: .7 },
+{ target: "Vitamin D", source: "Vitamin depletion" , strength: .8 },
+{ target: "Vitamin D", source: "vitamin D binding" , strength: .8 },
+{ target: "Vitamin D", source: "3-deoxyvitamin D3" , strength: .8 },
+{ target: "Vitamin D", source: "1-ALPHA-VITAMIN D" , strength: .8 },
+{ target: "Vitamin D", source: "Vitamin D overdose" , strength: .9 },
+{ target: "Vitamin D", source: "1-hydroxyvitamin D5" , strength: .10 },
+{ target: "Vitamin D", source: "Increased vitamin D" , strength: .10 },
+{ target: "Vitamin D", source: "Calcium + vitamin D" , strength: .10 },
+{ target: "Vitamin D", source: "Vitamin D-rich diet" , strength: .10 },
+{ target: "Vitamin D", source: "Vitamin D3 Receptor" , strength: .10 },
+{ target: "Vitamin D", source: "Decreased vitamin D" , strength: .10 },
+{ target: "Vitamin D", source: "22-fluorovitamin D3)" , strength: .10 },
+{ target: "Vitamin D", source: "25-hydroxyvitamin D" , strength: .10 },
+{ target: "Vitamin D", source: "dihydroxy-vitamin D3" , strength: .11 },
+{ target: "Vitamin D", source: "24-hydroxyvitamin D3" , strength: .11 },
+{ target: "Vitamin D", source: "20-hydroxyvitamin D3" , strength: .11 },
+{ target: "Vitamin D", source: "Vitamin D Deficiency" , strength: .11 },
+{ target: "Vitamin D", source: "vitamin D metabolism" , strength: .11 },
+{ target: "Vitamin D", source: "24-hydroxyvitamin D2" , strength: .11 },
+{ target: "Vitamin D", source: "Nutrition, Vitamin D" , strength: .11 },
+{ target: "Vitamin D", source: "vitamin D3 palmitate" , strength: .11 },
+{ target: "Vitamin D", source: "vitamin D catabolism" , strength: .11 },
+{ target: "Vitamin D", source: "11-hydroxyvitamin D3" , strength: .11 },
+{ target: "Vitamin D", source: "Vitamin D measurement" , strength: .12 },
+{ target: "Vitamin D", source: "Vitamin D3 metabolite" , strength: .12 },
+{ target: "Vitamin D", source: "25-Hydroxyvitamin D 2" , strength: .12 },
+{ target: "Vitamin D", source: "22-ene-25-oxavitamin D" , strength: .13 },
+{ target: "Vitamin D", source: "Poisoning by vitamin D" , strength: .13 },
+{ target: "Vitamin D", source: "1-hydroxyprevitamin D3" , strength: .13 },
+{ target: "Vitamin D", source: "Vitamin D3 Receptor|VDR" , strength: .14 },
+{ target: "Vitamin D", source: "Vitamin D3 Receptor|DIO3" , strength: .15 },
+{ target: "Vitamin D", source: "vitamin D3 sulfoconjugate" , strength: .16 },
+{ target: "Vitamin D", source: "VITAMIN D AND METABOLITES" , strength: .16 },
+{ target: "Vitamin D", source: "vitamin D3 25-hydroxylase" , strength: .16 },
+{ target: "Vitamin D", source: "Vitamin D Chewable Tablet" , strength: .16 },
+{ target: "Vitamin D", source: "Vitamin D-Binding Protein" , strength: .16 },
+{ target: "Vitamin D", source: "Vitamin D Response Element" , strength: .17 },
+{ target: "Vitamin D", source: "vitamin D receptor binding" , strength: .17 },
+{ target: "Vitamin D", source: "24-oxa-1-hydroxyvitamin D3" , strength: .17 },
+{ target: "Vitamin D", source: "vitamin D3 glucosiduronate" , strength: .17 },
+{ target: "Vitamin D", source: "Serum vitamin D measurement" , strength: .18 },
+{ target: "Vitamin D", source: "Vitamin D-dependent rickets" , strength: .18 },
+{ target: "Vitamin D", source: "Serum vitamin D2 measurement" , strength: .19 },
+{ target: "Vitamin D", source: "Vitamin D-Binding Protein|GC" , strength: .19},
+{ target: "Vitamin D", source: "23-keto-25-hydroxyvitamin D3" , strength: .19 },
+{ target: "Vitamin D", source: "10-keto-25-hydroxyvitamin D3" , strength: .19},
+{ target: "Vitamin D", source: "vitamin D 1-alpha hydroxylase" , strength: .20 },
+{ target: "Vitamin D", source: "1-hydroxy-25-fluorovitamin D3" , strength: .20 },
+{ target: "Vitamin D", source: "vitamin D3 25-hydroxylase|DIO3" , strength: .21 },
+{ target: "Vitamin D", source: "Accidental vitamin D poisoning" , strength: .21 },
+{ target: "Vitamin D", source: "Water soluble vitamin deficienciess" , strength: .25 },
+{ target: "Vitamin D", source: "vitamin D3 25-hydroxylase activity" , strength: .25 },
+{ target: "Vitamin D", source: "2-oxa-3-deoxy-25-hydroxyvitamin D3" , strength: . },
+{ target: "Vitamin D", source: "vitamin D biosynthesis" , strength: .13 },
+{ target: "Vitamin D", source: "vitamin D biosynthesis" , strength: .13 },
+{ target: "Vitamin D", source: "vitamin D biosynthesis" , strength: .13 },
+{ target: "Vitamin D", source: "vitamin D biosynthesis" , strength: .13 },
+{ target: "Vitamin D", source: "vitamin D biosynthesis" , strength: .13 },
+{ target: "Vitamin D", source: "vitamin D biosynthesis" , strength: .13 },
+
+
+
+
+
+{ target: "Vitamin D", source: "Vitamin D2" , strength: .1 },
+{ target: "Vitamin D", source: "Vitamin D milk" , strength: .5 },
+{ target: "Vitamin D", source: "previtamin D(3)" , strength: .6 },
+{ target: "Vitamin D", source: "Vitamin disease" , strength: .6 },
+{ target: "Vitamin D", source: "Vitamin D intake" , strength: .7 },
+{ target: "Vitamin D", source: "3-thiovitamin D3" , strength: .7 },
+{ target: "Vitamin D", source: "Vitamin D Analog" , strength: .7 },
+{ target: "Vitamin D", source: "25-azavitamin D3" , strength: .7 },
+{ target: "Vitamin D", source: "Vitamin depletion" , strength: .8 },
+{ target: "Vitamin D", source: "vitamin D binding" , strength: .8 },
+{ target: "Vitamin D", source: "3-deoxyvitamin D3" , strength: .8 },
+{ target: "Vitamin D", source: "1-ALPHA-VITAMIN D" , strength: .8 },
+{ target: "Vitamin D", source: "Vitamin D overdose" , strength: .9 },
+{ target: "Vitamin D", source: "1-hydroxyvitamin D5" , strength: .10 },
+{ target: "Vitamin D", source: "Increased vitamin D" , strength: .10 },
+{ target: "Vitamin D", source: "Calcium + vitamin D" , strength: .10 },
+{ target: "Vitamin D", source: "Vitamin D-rich diet" , strength: .10 },
+{ target: "Vitamin D", source: "Vitamin D3 Receptor" , strength: .10 },
+{ target: "Vitamin D", source: "Decreased vitamin D" , strength: .10 },
+{ target: "Vitamin D", source: "22-fluorovitamin D3)" , strength: .10 },
+{ target: "Vitamin D", source: "25-hydroxyvitamin D" , strength: .10 },
+{ target: "Vitamin D", source: "dihydroxy-vitamin D3" , strength: .11 },
+{ target: "Vitamin D", source: "24-hydroxyvitamin D3" , strength: .11 },
+{ target: "Vitamin D", source: "20-hydroxyvitamin D3" , strength: .11 },
+{ target: "Vitamin D", source: "Vitamin D Deficiency" , strength: .11 },
+{ target: "Vitamin D", source: "vitamin D metabolism" , strength: .11 },
+{ target: "Vitamin D", source: "24-hydroxyvitamin D2" , strength: .11 },
+{ target: "Vitamin D", source: "Nutrition, Vitamin D" , strength: .11 },
+{ target: "Vitamin D", source: "vitamin D3 palmitate" , strength: .11 },
+{ target: "Vitamin D", source: "vitamin D catabolism" , strength: .11 },
+{ target: "Vitamin D", source: "11-hydroxyvitamin D3" , strength: .11 },
+{ target: "Vitamin D", source: "Vitamin D measurement" , strength: .12 },
+{ target: "Vitamin D", source: "Vitamin D3 metabolite" , strength: .12 },
+{ target: "Vitamin D", source: "25-Hydroxyvitamin D 2" , strength: .12 },
+{ target: "Vitamin D", source: "22-ene-25-oxavitamin D" , strength: .13 },
+{ target: "Vitamin D", source: "Poisoning by vitamin D" , strength: .13 },
+{ target: "Vitamin D", source: "1-hydroxyprevitamin D3" , strength: .13 },
+{ target: "Vitamin D", source: "Vitamin D3 Receptor|VDR" , strength: .14 },
+{ target: "Vitamin D", source: "Vitamin D3 Receptor|DIO3" , strength: .15 },
+{ target: "Vitamin D", source: "vitamin D3 sulfoconjugate" , strength: .16 },
+{ target: "Vitamin D", source: "VITAMIN D AND METABOLITES" , strength: .16 },
+{ target: "Vitamin D", source: "vitamin D3 25-hydroxylase" , strength: .16 },
+{ target: "Vitamin D", source: "Vitamin D Chewable Tablet" , strength: .16 },
+{ target: "Vitamin D", source: "Vitamin D-Binding Protein" , strength: .16 },
+{ target: "Vitamin D", source: "Vitamin D Response Element" , strength: .17 },
+{ target: "Vitamin D", source: "vitamin D receptor binding" , strength: .17 },
+{ target: "Vitamin D", source: "24-oxa-1-hydroxyvitamin D3" , strength: .17 },
+{ target: "Vitamin D", source: "vitamin D3 glucosiduronate" , strength: .17 },
+{ target: "Vitamin D", source: "Serum vitamin D measurement" , strength: .18 },
+{ target: "Vitamin D", source: "Vitamin D-dependent rickets" , strength: .18 },
+{ target: "Vitamin D", source: "Serum vitamin D2 measurement" , strength: .19 },
+{ target: "Vitamin D", source: "Vitamin D-Binding Protein|GC" , strength: .19},
+{ target: "Vitamin D", source: "23-keto-25-hydroxyvitamin D3" , strength: .19 },
+{ target: "Vitamin D", source: "10-keto-25-hydroxyvitamin D3" , strength: .19},
+{ target: "Vitamin D", source: "vitamin D 1-alpha hydroxylase" , strength: .20 },
+{ target: "Vitamin D", source: "1-hydroxy-25-fluorovitamin D3" , strength: .20 },
+{ target: "Vitamin D", source: "vitamin D3 25-hydroxylase|DIO3" , strength: .21 },
+{ target: "Vitamin D", source: "Accidental vitamin D poisoning" , strength: .21 },
+{ target: "Vitamin D", source: "Water soluble vitamin deficienciess" , strength: .25 },
+{ target: "Vitamin D", source: "vitamin D3 25-hydroxylase activity" , strength: .25 },
+
+
